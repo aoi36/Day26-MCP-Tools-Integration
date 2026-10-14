@@ -52,6 +52,9 @@ cd mcp-client
 # Create .env file with your Google API key
 # Get free key from: https://aistudio.google.com/apikey
 echo "GOOGLE_API_KEY=your_google_api_key_here" > .env
+
+# In Windows PowerShell, write UTF-8 explicitly instead of using >:
+[System.IO.File]::WriteAllText(".env", "GOOGLE_API_KEY=your_google_api_key_here", [System.Text.UTF8Encoding]::new($false))
 ```
 
 ### 3. Install Dependencies
@@ -103,7 +106,7 @@ connection_params = StreamableHTTPConnectionParams(
 
 root_agent = Agent(
     name="weather_agent",
-    model="gemini-2.5-flash",
+    model="gemini-3.8-flash",
     tools=[weather_tools],
 )
 ```
@@ -134,6 +137,7 @@ Create `.env` file:
 ```bash
 GOOGLE_API_KEY=your_gemini_api_key
 ```
+`GEMINI_API_KEY` is also accepted; the setup verifier and agent map it to `GOOGLE_API_KEY` for ADK.
 
 ## Resources
 

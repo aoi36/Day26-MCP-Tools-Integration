@@ -11,23 +11,25 @@ def check_environment():
     """Check if .env file exists and is configured"""
     print("🔍 Checking environment configuration...")
     
-    env_file = Path(".env")
+    env_file = Path(__file__).resolve().parent / ".env"
     if not env_file.exists():
         print("❌ .env file not found")
-        print("   Run: echo 'GOOGLE_API_KEY=your_key' > .env")
+        print(f"   Expected at: {env_file}")
+        print("   Create it with: echo 'GOOGLE_API_KEY=your_key' > .env")
         return False
     
-    # Check if GOOGLE_API_KEY is set
+    # Accept GEMINI_API_KEY as an alias, while exposing the name expected by ADK.
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(dotenv_path=env_file)
     
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key or api_key == "your_google_api_key_here":
-        print("❌ GOOGLE_API_KEY not configured in .env")
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key or api_key in ("your_google_api_key_here", "your_gemini_api_key", "your_key"):
+        print("❌ GOOGLE_API_KEY or GEMINI_API_KEY not configured in .env")
         print("   Get key from: https://aistudio.google.com/apikey")
         return False
     
-    print(f"✅ GOOGLE_API_KEY configured ({api_key[:10]}...)")
+    os.environ.setdefault("GOOGLE_API_KEY", api_key)
+    print("✅ Google Gemini API key configured")
     return True
 
 def check_dependencies():
@@ -150,4 +152,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
