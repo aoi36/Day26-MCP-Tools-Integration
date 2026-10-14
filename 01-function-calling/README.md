@@ -1,6 +1,6 @@
 # 01 — Function Calling thuần (Google Gemini SDK)
 
-Tool `get_weather` được **định nghĩa schema thủ công** và **thực thi ngay trong app**.
+Các tool `get_weather` và `get_forecast` được **định nghĩa schema thủ công** và **thực thi ngay trong app** bằng dữ liệu thật từ Open-Meteo (không mock).
 Model chỉ quyết định gọi tool nào — app mới là nơi chạy.
 
 ```

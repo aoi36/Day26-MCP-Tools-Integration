@@ -11,7 +11,18 @@ Cách chạy:
 
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
 
+import json
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+load_dotenv()
 client = genai.Client()
 
 MODEL = "gemini-2.5-flash"
@@ -38,36 +49,84 @@ get_weather_declaration = types.FunctionDeclaration(
     ),
 )
 
-TOOLS = [types.Tool(function_declarations=[get_weather_declaration])]
+get_forecast_declaration = types.FunctionDeclaration(
+    name="get_forecast",
+    description="Lấy dự báo thời tiết cho một thành phố từ 1 đến 7 ngày tới",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "city": types.Schema(
+                type=types.Type.STRING, description="Tên thành phố"
+            ),
+            "days": types.Schema(
+                type=types.Type.INTEGER,
+                description="Số ngày dự báo (từ 1 đến 7, mặc định 3)",
+            ),
+        },
+        required=["city"],
+    ),
+)
+
+TOOLS = [
+    types.Tool(
+        function_declarations=[get_weather_declaration, get_forecast_declaration]
+    )
+]
 
 
-# 2. App tự thực thi tool (trong thực tế sẽ gọi API thời tiết thật)
+# 2. App tự thực thi tool bằng Open-Meteo (API thật, không cần API key).
+# ponytail: Open-Meteo REST trực tiếp không cache/geocode disambiguation; thêm local cache khi request volume tăng.
+OPEN_METEO_GEOCODING = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
+
+
+def _get_json(url: str, params: dict[str, str]) -> dict:
+    request = Request(f"{url}?{urlencode(params)}", headers={"User-Agent": "weather-function-calling/1.0"})
+    with urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+
+def _location(city: str) -> dict:
+    data = _get_json(OPEN_METEO_GEOCODING, {"name": city, "count": "1", "language": "en", "format": "json"})
+    results = data.get("results", [])
+    if not results:
+        raise ValueError(f"Không tìm thấy thành phố: {city}")
+    return results[0]
+
+
+def _weather(city: str, days: int = 3) -> str:
+    if not 1 <= days <= 7:
+        raise ValueError("days phải nằm trong khoảng 1 đến 7")
+    location = _location(city)
+    data = _get_json(OPEN_METEO_FORECAST, {
+        "latitude": str(location["latitude"]), "longitude": str(location["longitude"]),
+        "forecast_days": str(days), "timezone": "auto",
+        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+    })
+    return json.dumps({"city": location["name"], "country": location.get("country"), "current": data.get("current"), "forecast": data.get("daily")}, ensure_ascii=False)
+
+
 def get_weather(city: str) -> str:
-    """Trả về thời tiết (mock) của *city*. Dùng làm tool cho model."""
-    mock_data = {
-        "Hà Nội": {
-            "nhiệt_độ": "29°C",
-            "thời_tiết": "trời mưa nhẹ",
-            "độ_ẩm": "82%",
-            "gió": {"hướng": "Đông Nam", "tốc_độ": "12 km/h"},
-        },
-        "Hồ Chí Minh": {
-            "nhiệt_độ": "33°C",
-            "thời_tiết": "mưa rào",
-            "độ_ẩm": "75%",
-            "gió": {"hướng": "Tây Nam", "tốc_độ": "15 km/h"},
-        },
-        "Đà Nẵng": {
-            "nhiệt_độ": "30°C",
-            "thời_tiết": "nhiều mây",
-            "độ_ẩm": "78%",
-            "gió": {"hướng": "Đông", "tốc_độ": "10 km/h"},
-        },
-    }
-    import json
+    """Lấy thời tiết hiện tại của một thành phố từ Open-Meteo."""
+    try:
+        return _weather(city, 1)
+    except (HTTPError, URLError, TimeoutError, ValueError) as error:
+        return json.dumps({"error": str(error)}, ensure_ascii=False)
 
-    default = {"nhiệt_độ": "28°C", "thời_tiết": "không có dữ liệu chi tiết"}
-    return json.dumps({"city": city, **mock_data.get(city, default)}, ensure_ascii=False)
+
+def get_forecast(city: str, days: int = 3) -> str:
+    """Lấy dự báo thật từ Open-Meteo cho 1-7 ngày."""
+    try:
+        return _weather(city, days)
+    except (HTTPError, URLError, TimeoutError, ValueError) as error:
+        return json.dumps({"error": str(error)}, ensure_ascii=False)
+
+
+TOOL_MAP = {
+    "get_weather": get_weather,
+    "get_forecast": get_forecast,
+}
 
 
 def run(prompt: str) -> str:
@@ -94,7 +153,8 @@ def run(prompt: str) -> str:
         function_responses = []
         for fc in resp.function_calls:
             print(f"  [model yêu cầu] {fc.name}({fc.args})")
-            result = get_weather(**fc.args)  # <-- app chạy, không phải model
+            tool_fn = TOOL_MAP.get(fc.name)
+            result = tool_fn(**fc.args) if tool_fn else json.dumps({"error": f"Tool không hỗ trợ: {fc.name}"}, ensure_ascii=False)
             print(f"  [app thực thi]  -> {result}")
             function_responses.append(
                 types.Part.from_function_response(
@@ -117,7 +177,14 @@ def run(prompt: str) -> str:
     return resp.text
 
 
+def _self_check() -> None:
+    data = json.loads(get_forecast("Hanoi", days=2))
+    assert "forecast" in data and "time" in data["forecast"], f"Invalid forecast: {data}"
+    assert len(data["forecast"]["time"]) == 2, f"Expected 2 days: {data}"
+
+
 if __name__ == "__main__":
-    question = "Thời tiết Hà Nội và Đà Nẵng hôm nay thế nào?"
+    _self_check()
+    question = "Dự báo thời tiết Hà Nội và Đà Nẵng 3 ngày tới thế nào?"
     print(f"User: {question}\n")
     print("Trả lời:", run(question))
